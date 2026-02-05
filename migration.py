@@ -16,10 +16,10 @@ try:
     # 1. MySQL 연결
     try:
         mysql_conn = mysql.connector.connect(
-            host="182.162.96.167",
+            host="182.162",
             port=3306,   
             user="memintgr",
-            password="devpass12intgr#",
+            password=",
             database='memintgr'
         
         )
@@ -290,5 +290,6 @@ finally:
         print("DB 연결 종료 완료")
     except Exception as e:
         print(f"[경고] 연결 종료 중 오류 발생: {e}")
+
 
     
