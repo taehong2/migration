@@ -15,10 +15,10 @@ try:
     # 2. Oracle 연결
     try:
         oracledb.init_oracle_client(lib_dir=r"C:\instantclient_19_26")
-        dsn = oracledb.makedsn("182.162.96.167", 1551, sid="mvno")
+        dsn = oracledb.makedsn("182.162", 1551, sid="mvno")
         oracle_conn = oracledb.connect(
             user='altact',
-            password='Altact!21c',
+            password='',
             dsn=dsn
         )
         oracle_cursor = oracle_conn.cursor()
@@ -420,5 +420,6 @@ finally:
         print("DB 연결 종료 완료")
     except Exception as e:
         print(f"[경고] 연결 종료 중 오류 발생: {e}")
+
 
     
