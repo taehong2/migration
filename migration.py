@@ -35,7 +35,7 @@ try:
         dsn = oracledb.makedsn("182.162.96.167", 1551, sid="mvno")
         oracle_conn = oracledb.connect(
             user='altact',
-            password='Altact!21c',
+            password='',
             dsn=dsn
         )
         oracle_cursor = oracle_conn.cursor()
@@ -293,3 +293,4 @@ finally:
 
 
     
+
