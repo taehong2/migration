@@ -6,8 +6,9 @@ import unicodedata
 oracledb.defaults.fetch_lobs = True
 
 # 변수
-table_name = 'XPD_CUSTOM_HIST_DTL'
 oracle_username = 'altact'
+table_name = 'ORDER_SETLE'
+
 
 # 연결 객체 초기화
 mysql_conn = oracle_conn = None
@@ -15,15 +16,15 @@ mysql_conn = oracle_conn = None
 try:
     # 1. MySQL 연결
     try:
-        mysql_conn = mysql.connector.connect(
-            host="182.162",
+        mysql_conn = mysql.connector.connect(   #생성자를 통한 객체 정의
+            host="182.162.96.167",  
             port=3306,   
             user="memintgr",
-            password=",
+            password="devpass12intgr#",
             database='memintgr'
         
         )
-        mysql_cursor = mysql_conn.cursor()
+        mysql_cursor = mysql_conn.cursor() # 객체를 커서로 초기화
         print("MySQL 연결 성공")
     except mysql.connector.Error as e:
         print(f"[오류] MySQL 연결 실패: {e}")
@@ -35,7 +36,7 @@ try:
         dsn = oracledb.makedsn("182.162.96.167", 1551, sid="mvno")
         oracle_conn = oracledb.connect(
             user='altact',
-            password='',
+            password='Altact!21c',
             dsn=dsn
         )
         oracle_cursor = oracle_conn.cursor()
@@ -44,98 +45,47 @@ try:
         print(f"[오류] Oracle 연결 실패: {e}")
         sys.exit(1)
 
+    def split_top_level(def_block: str) -> list[str]:
+        items, buf = [], []
+        depth = 0
+        quote = None
+        esc = False
 
-    # 3. DDL 변환 함수
-    def convert_mysql_to_oracle_ddl(mysql_ddl):
-        ddl_lines = mysql_ddl.split('\n')
-        oracle_lines = [f"CREATE TABLE {table_name} ("]
-        primary_key = ""
-        #comments = []
-        column_comments = {}
-
-        for line in ddl_lines[1:]:  # 기본키 처리
-            line = line.strip().rstrip(',')
-            if line.upper().startswith('PRIMARY KEY'):
-                match = re.search(r'\((.*?)\)', line)
-                if match:
-                    pk_cols = match.group(1).replace('`', '').strip()
-                    pk_constraint_name = f"PK_{table_name.upper()}"
-                    primary_key = f"  CONSTRAINT {pk_constraint_name} PRIMARY KEY ({pk_cols})"
-                else:
-                    print(f"[WARNING] PRIMARY KEY 구문 파싱 실패: {line}")
+        for ch in def_block:
+            if quote:
+                buf.append(ch)
+                if esc:
+                    esc = False
+                elif ch == '\\':
+                    esc = True
+                elif ch == quote:
+                    quote = None
                 continue
 
-            col_match = re.match(r'`(.+?)`\s+([^\s]+(?:\([^\)]*\))?)\s*(.*)', line)
-            if col_match:
-                col_name, col_type, rest = col_match.groups()
-                print(f"col_type raw: '{col_type}'")
-                col_type_upper = col_type.upper()
-                if 'INT' in col_type_upper:
-                    oracle_type = 'NUMBER'
-                elif 'CHAR' in col_type_upper or 'TEXT' in col_type_upper:
-                    size_match = re.search(r'\((\d+)\)', col_type)
-                    size = size_match.group(1) if size_match else '255'
-                    oracle_type = f"VARCHAR2({size})"
-                elif 'DATE' in col_type_upper:
-                    oracle_type = 'DATE'
-                elif 'DECIMAL' in col_type_upper or 'NUMERIC' in col_type_upper:
-                    size_match = re.search(r'\(\s*(\d+)\s*,\s*(\d+)\s*\)', col_type)
-                    oracle_type = f"NUMBER({size_match.group(1)},{size_match.group(2)})" if size_match else 'NUMBER'
-                else:
-                    oracle_type = 'VARCHAR2(255)'
-                
-                #디폴트 처리
-                disallowed_defaults = {
-                'now()': 'TIMESTAMP',
-                'current_timestamp': 'TIMESTAMP',
-                'uuid()': 'RAW(16)',
-                'getdate()': 'DATE',
-                'curdate()': 'DATE',
-                'newid()': 'RAW(16)',
-                'sys_guid()': 'RAW(16)',
-                }
+            if ch in ("'", '"'):
+                quote = ch
+                buf.append(ch)
+                continue
 
-                default_val = ''
-                default_match = re.search(r'default\s+((?:\'[^\']*\'|"[^"]*"|[^\s,]+))', rest, re.IGNORECASE)
-                if default_match:
-                   val_raw = default_match.group(1)
-                   val_clean = val_raw.strip().lower()
-                   if val_clean.startswith('(') and val_clean.endswith(')'):
-                        val_clean = val_clean[1:-1].strip()
-                
-                   if val_clean in disallowed_defaults:
-                        oracle_type = disallowed_defaults[val_clean]
-                   else:
-                        default_val = f'DEFAULT {val_raw}'
-               
-                #not null처리
-                not_null = 'NOT NULL' if 'not null' in rest.lower() else ''
-                col_def = f'  {col_name} {oracle_type} {default_val} {not_null}'.strip()
-                oracle_lines.append(col_def + ',')
+            if ch == '(':
+                depth += 1
+            elif ch == ')':
+                depth -= 1
 
-                #comment처리
-                comment_match = re.search(r'comment\s+\'(.*?)\'', rest, re.IGNORECASE)
-                if comment_match:
-                    column_comments[col_name.upper()] = comment_match.group(1)
+            if ch == ',' and depth == 0:
+                item = ''.join(buf).strip()
+                if item:
+                    items.append(item)
+                buf = []
+            else:
+                buf.append(ch)
 
-
-                #oracle_lines.append(f'  {col_name} {oracle_type},')
-
-        if primary_key:
-        # 마지막 줄에 콤마가 있으면, 그 자리에 PK 추가
-            if not oracle_lines[-1].endswith(','):
-                oracle_lines[-1] += ','
-            oracle_lines.append(f'  {primary_key}')
-        else:
-            # PK가 없을 경우, 마지막 줄 콤마만 제거
-            if oracle_lines[-1].endswith(','):
-                oracle_lines[-1] = oracle_lines[-1][:-1]
-
-        oracle_lines.append(')')  
-        oracle_ddl = '\n'.join(oracle_lines)
-
-
-        def clean_comment(comment):
+        last = ''.join(buf).strip()
+        if last:
+            items.append(last)
+        return items
+    
+    def clean_comment(comment):
             comment = str(comment)
 
             # 유니코드 제어 문자 및 보이지 않는 문자 제거
@@ -152,15 +102,361 @@ try:
 
             # 개행 및 캐리지리턴 제거
             return comment.strip()
+    
+    def _squeeze_spaces(s: str) -> str:
+        return re.sub(r"\s+", " ", s).strip()
+    
+    def parse_default(rest: str):
+        m = re.search(r"\bdefault\s+((?:'[^']*'|\"[^\"]*\"|[^\s,]+))", rest, re.IGNORECASE)
+        if not m:
+            return None, None, rest
+
+        raw = m.group(1).strip()
+        clean = raw.strip().lower()
         
+        if clean.startswith("(") and clean.endswith(")"):
+            clean = clean[1:-1].strip()
+
+        rest_wo = (rest[:m.start()] + rest[m.end():]).strip()
+        rest_wo = _squeeze_spaces(rest_wo)
+
+        return raw, clean, rest_wo
+    
+    def map_default_to_oracle(default_raw: str, default_clean: str, oracle_type: str, allow_type_override: bool = False):
+        warn = None
+        default_sql = ""
+        
+        if default_clean in ("null",):
+            return "", oracle_type, None
+        
+        fn_map = {
+            "now()": "SYSTIMESTAMP",
+            "current_timestamp": "SYSTIMESTAMP",
+            "current_timestamp()": "SYSTIMESTAMP",
+            "curdate()": "TRUNC(SYSDATE)",
+            "sysdate()": "SYSDATE",
+            "sysdate": "SYSDATE",
+        }
+            # uuid()/newid() 계열 처리
+        # - Oracle SYS_GUID()는 RAW(16) 반환
+        # - 컬럼이 문자열이면 RAWTOHEX(SYS_GUID())로 32자리 HEX 문자열로 맞추는 게 안전함
+        if default_clean in ("uuid()", "uuid", "newid()", "newid", "sys_guid()", "sys_guid"):
+            if "RAW" in oracle_type.upper():
+                default_sql = "DEFAULT SYS_GUID()"
+            else:
+                # 문자열 컬럼에 안전한 기본값(32 hex)
+                default_sql = "DEFAULT RAWTOHEX(SYS_GUID())"
+                warn = f"DEFAULT {default_clean} → RAWTOHEX(SYS_GUID())로 치환함 (컬럼 타입={oracle_type})"
+            return default_sql, oracle_type, warn
+
+        if default_clean in fn_map:
+            return f"DEFAULT {fn_map[default_clean]}", oracle_type, None
+
+        # b'0'/b'1' 같은 비트 리터럴(자주 나옴)
+        if default_clean in ("b'0'", "b'1'"):
+            if "NUMBER" in oracle_type.upper():
+                num = "0" if default_clean == "b'0'" else "1"
+                return f"DEFAULT {num}", oracle_type, None
+            warn = f"비트 리터럴 DEFAULT({default_raw})은 Oracle에서 직접 호환 어려움"
+            return f"DEFAULT {default_raw}", oracle_type, warn
+
+        # 숫자 문자열 '0', '0.00' 정규화(컬럼이 NUMBER면 따옴표 제거)
+        if re.fullmatch(r"'[0-9]+(\.[0-9]+)?'", default_raw):
+            if "NUMBER" in oracle_type.upper():
+                num = default_raw.strip("'")
+                return f"DEFAULT {num}", oracle_type, None
+            # 문자 타입이면 그대로 유지
+            return f"DEFAULT {default_raw}", oracle_type, None
+        return f"DEFAULT {default_raw}", oracle_type, None
+    
+    def map_mysql_type_to_oracle(mysql_type: str) -> str:
+        """
+        MySQL 컬럼 타입 문자열을 Oracle 타입으로 매핑함.
+        - 입력 예: int, bigint, varchar(50), char(1), text, decimal(12,2),
+                numeric(10,0), date, datetime, timestamp(6), tinyint(1), float, double
+        - 출력 예: NUMBER, VARCHAR2(50), CHAR(1), CLOB, NUMBER(12,2),
+                DATE, TIMESTAMP(6), NUMBER(1), BINARY_FLOAT, BINARY_DOUBLE
+        """
+        if not mysql_type:
+            return "VARCHAR2(255)"
+
+        t = mysql_type.strip().lower()
+
+        # unsigned 제거(Oracle엔 unsigned 없음 → 필요 시 체크 제약으로 별도 처리)
+        t = re.sub(r"\bunsigned\b", "", t).strip()
+
+        # zerofill 제거
+        t = re.sub(r"\bzerofill\b", "", t).strip()
+
+        # 타입명 + 괄호 파라미터 분리
+        # ex) "decimal(12,2)" -> base="decimal", args="12,2"
+        m = re.match(r"^([a-z]+)\s*(\((.*?)\))?$", t)
+        if not m:
+            return "VARCHAR2(255)"
+
+        base = m.group(1)
+        args = (m.group(3) or "").strip()
+
+        # ---- 문자계열 ----
+        if base in ("varchar", "nvarchar", "character varying"):
+            size = args.split(",")[0].strip() if args else "255"
+            return f"VARCHAR2({size})"
+
+        if base in ("char", "nchar", "character"):
+            size = args.split(",")[0].strip() if args else "1"
+            return f"CHAR({size})"
+
+        # text류 → CLOB
+        if base in ("tinytext", "text", "mediumtext", "longtext"):
+            return "CLOB"
+
+        # ---- 숫자계열 ----
+        if base in ("tinyint",):
+            # MySQL tinyint(1)은 boolean 용도로 자주 씀
+            if args.strip() == "1":
+                return "NUMBER(1)"
+            return "NUMBER(3)"
+
+        if base in ("smallint",):
+            return "NUMBER(5)"
+
+        if base in ("mediumint",):
+            return "NUMBER(7)"
+
+        if base in ("int", "integer"):
+            return "NUMBER(10)"
+
+        if base in ("bigint",):
+            return "NUMBER(19)"
+
+        if base in ("decimal", "numeric"):
+            if args and "," in args:
+                p, s = [x.strip() for x in args.split(",", 1)]
+                return f"NUMBER({p},{s})"
+            if args:
+                p = args.strip()
+                return f"NUMBER({p})"
+            return "NUMBER"
+
+        # float/double 매핑(원하면 NUMBER로 통일해도 됨)
+        if base in ("float",):
+            return "BINARY_FLOAT"
+
+        if base in ("double", "real", "double precision"):
+            return "BINARY_DOUBLE"
+
+        # ---- 날짜/시간 ----
+        if base in ("date",):
+            return "DATE"
+
+        # MySQL datetime은 Oracle에서 DATE 또는 TIMESTAMP로 선택 가능
+        # 운영/이관 관점에선 TIMESTAMP가 더 안전(초/소수점 보존)
+        if base in ("datetime",):
+            # datetime(6) 같은 케이스
+            frac = args.split(",")[0].strip() if args else None
+            if frac and frac.isdigit():
+                return f"TIMESTAMP({frac})"
+            return "TIMESTAMP(6)"
+
+        if base in ("timestamp",):
+            frac = args.split(",")[0].strip() if args else None
+            if frac and frac.isdigit():
+                return f"TIMESTAMP({frac})"
+            return "TIMESTAMP(6)"
+
+        if base in ("time",):
+            # MySQL TIME은 날짜 없이 시간만 → Oracle은 DATE/TIMESTAMP로 직접 대응 애매
+            # 보수적으로 VARCHAR2(8~15) 권장(또는 INTERVAL DAY TO SECOND 정책)
+            return "VARCHAR2(15)"
+
+        if base in ("year",):
+            return "NUMBER(4)"
+
+        # ---- 바이너리/LOB ----
+        if base in ("blob", "tinyblob", "mediumblob", "longblob"):
+            return "BLOB"
+
+        if base in ("binary", "varbinary"):
+            # 길이 있으면 RAW(n) 정도로 매핑 (최대 2000)
+            if args and args.strip().isdigit():
+                n = int(args.strip())
+                n = min(n, 2000)
+                return f"RAW({n})"
+            return "BLOB"
+
+        # ---- 기타 ----
+        if base in ("json",):
+            # Oracle 21c+면 JSON type도 가능하지만 버전 의존 → CLOB로 보수 매핑
+            return "CLOB"
+
+        if base in ("enum", "set"):
+            # enum/set은 후보값 체크 제약이 필요함. 우선 VARCHAR2로 수용.
+            size = "255"
+            return f"VARCHAR2({size})"
+
+        # 못 잡는 타입은 일단 varchar로
+        return "VARCHAR2(255)"
+
+    # 3. DDL 변환 함수
+    def convert_mysql_to_oracle_ddl(mysql_ddl):
+        # 0) CREATE TABLE (...) 괄호 블록(def_block) 추출 (괄호 매칭 + quote 처리)
+        start = mysql_ddl.find('(')
+        if start < 0:
+            raise ValueError("DDL에서 '(' 를 찾지 못함")
+
+        depth = 0
+        end = None
+        quote = None  # "'", '"', '`'
+        esc = False
+
+        for i in range(start, len(mysql_ddl)):
+            ch = mysql_ddl[i]
+
+            if quote:
+                if esc:
+                    esc = False
+                    continue
+                if ch == '\\':
+                    esc = True
+                    continue
+                if ch == quote:
+                    quote = None
+                continue
+
+            if ch in ("'", '"', '`'):
+                quote = ch
+                continue
+
+            if ch == '(':
+                depth += 1
+            elif ch == ')':
+                depth -= 1
+                if depth == 0:
+                    end = i
+                    break
+
+        if end is None:
+            raise ValueError("DDL 괄호 매칭 실패")
+
+        def_block = mysql_ddl[start + 1:end]  # 괄호 내부만
+
+        # 1) 최상위 콤마 기준 분리
+        items = split_top_level(def_block)
+
+        oracle_lines = [f"CREATE TABLE {table_name} ("]
+        primary_key = ""
+        column_comments = {}
+        unique_keys = []  
+        indexes = []    # for Key
+        
+        for item in items:
+            line = item.strip().rstrip(',')
+
+            try:
+                # 2) PRIMARY KEY 처리
+                if line.upper().startswith('PRIMARY KEY'):
+                    match = re.search(r'\((.*?)\)', line)
+                    if match:
+                        pk_cols = match.group(1).replace('`', '').strip()
+                        pk_constraint_name = f"pk_{table_name.upper()}"
+                        primary_key = f"  CONSTRAINT {pk_constraint_name} PRIMARY KEY ({pk_cols})"
+                    else:
+                        print(f"[WARNING] PRIMARY KEY 구문 파싱 실패: {line}")
+                    continue
+            except Exception as e:
+                print(f"[ERROR] '{col}' PK 처리 중 오류 발생: {e}")
+
+            try:  
+                # 3) KEY / UNIQUE KEY 처리 (수집)
+                m = re.match(r'(?i)^(unique\s+)?key\s+`([^`]+)`\s*\((.*)\)\s*$', line)
+                if m:
+                    is_unique = bool(m.group(1))
+                    key_name = m.group(2)
+                    cols_raw = m.group(3)
+
+                    cols = []
+                    for c in cols_raw.split(','):
+                        c = c.strip()
+                        c = c.replace('`', '').strip()
+
+                        # col(10) 같은 prefix 길이(인덱스 prefix) 제거
+                        c = re.sub(r'\(\s*\d+\s*\)$', '', c).strip()
+
+                        cols.append(c)
+
+                    if is_unique:
+                        unique_keys.append((key_name, cols))
+                    else:
+                        indexes.append((key_name, cols))
+                    continue
+            except Exception as e:
+                print(f"[ERROR] '{col}' KEY/UK 처리 중 오류 발생: {e}")
+
+            # 4) 컬럼 파싱
+            col_match = re.match(r'`(.+?)`\s+([^\s]+(?:\([^\)]*\))?)\s*(.*)', line)
+            if not col_match:
+                # ENGINE/CHARSET/COMMENT 같은 테이블 옵션이 섞이면 무시
+                continue
+
+            col_name, col_type, rest = col_match.groups()
+
+            # 5) 타입 매핑(함수로 교체)
+            oracle_type = map_mysql_type_to_oracle(col_type)
+
+            # 6) DEFAULT 처리
+            default_val = ''
+            default_raw, default_clean, rest_wo_default = parse_default(rest)
+            if default_raw:
+                default_val, oracle_type, warn = map_default_to_oracle(default_raw, default_clean, oracle_type)
+                if warn:
+                    print(f"[WARN] {table_name}.{col_name} - {warn}")
+            else:
+                rest_wo_default = rest
+
+            # 7) NOT NULL 처리( DEFAULT 제거된 rest 기준 )
+            not_null = 'NOT NULL' if 'not null' in rest_wo_default.lower() else ''
+
+            # 8) COMMENT 처리( DEFAULT 제거된 rest 기준 )
+            comment_match = re.search(r"comment\s+'(.*?)'", rest_wo_default, re.IGNORECASE)
+            if comment_match:
+                column_comments[col_name.upper()] = comment_match.group(1)
+
+            col_def = f"{col_name} {oracle_type} {default_val} {not_null}".strip()
+            oracle_lines.append(col_def + ',')
+
+        # 9) PK 붙이기 / 마지막 콤마 정리
+        if primary_key:
+            # 마지막 컬럼 라인이 콤마로 끝나야 constraint 추가 가능
+            if oracle_lines and not oracle_lines[-1].endswith(','):
+                oracle_lines[-1] += ','
+            oracle_lines.append(primary_key)
+        else:
+            # PK 없으면 마지막 줄 콤마 제거
+            if len(oracle_lines) > 1 and oracle_lines[-1].endswith(','):
+                oracle_lines[-1] = oracle_lines[-1][:-1]
+
+        oracle_lines.append(');')
+
+        uk_sqls = []
+        for uk_name, cols in unique_keys:
+            cols_sql = ", ".join(cols)
+                # 제약명은 30자 제한 걸릴 수 있음(필요하면 축약 함수 추가)
+            uk_sqls.append(
+                f"ALTER TABLE {table_name} ADD CONSTRAINT {uk_name.upper()} UNIQUE ({cols_sql})"
+            )
+
+        index_sqls = [] # for KEY
+        for idx_name, cols in indexes:
+            cols_sql = ", ".join(cols)
+            index_sqls.append(
+                f"CREATE INDEX {idx_name.upper()} ON {table_name} ({cols_sql})"
+            )
+
+        # 10) COMMENT SQL 생성
         comment_sqls = []
- 
         for col, comment in column_comments.items():
             try:
-             
                 safe_comment = clean_comment(comment)
-
-                # COMMENT 구문 생성
                 comment_sql = (
                     f"COMMENT ON COLUMN {oracle_conn.username.upper()}."
                     f"{table_name}.{col} IS '{safe_comment}'"
@@ -169,48 +465,18 @@ try:
             except Exception as e:
                 print(f"[ERROR] '{col}' 컬럼 주석 처리 중 오류 발생: {e}")
 
-
-        return '\n'.join(oracle_lines), comment_sqls
+        return '\n'.join(oracle_lines), comment_sqls, uk_sqls, index_sqls
         
    
     # 4. MySQL DDL 추출
     try:
         mysql_cursor.execute(f"SHOW CREATE TABLE `{table_name}`")
         _, create_stmt = mysql_cursor.fetchone()
-        oracle_ddl, comment_sqls = convert_mysql_to_oracle_ddl(create_stmt)
+        oracle_ddl, comment_sqls, uk_sqls, index_sqls = convert_mysql_to_oracle_ddl(create_stmt)
         print("MySQL DDL 추출 성공")
     except Exception as e:
         print(f"[오류] MySQL 테이블 DDL 추출 실패: {e}")
         sys.exit(1)
-
-
-    def extract_mysql_indexes(mysql_cursor, table_name):
-        mysql_cursor.execute(f"SHOW INDEX FROM `{table_name}`")
-        rows = mysql_cursor.fetchall()
-
-        index_dict = {}
-        for row in rows:
-            key_name = row[2]
-            non_unique = row[1]
-            column_name = row[4]
-            
-            if key_name.upper() == 'PRIMARY' or non_unique == 0:
-                continue
-
-            if key_name not in index_dict:
-                index_dict[key_name] = []
-            index_dict[key_name].append(column_name)
-
-        return index_dict
-    
-    def generate_oracle_index_ddls(index_dict, table_name):
-        ddl_list = []
-        for idx_name, columns in index_dict.items():
-            col_list = ', '.join(columns)
-            ddl = f"CREATE INDEX {idx_name.upper()} ON {table_name} ({col_list})"
-            ddl_list.append(ddl)
-        return ddl_list
-    
 
     # 5. Oracle 테이블 생성
     try:
@@ -228,38 +494,29 @@ try:
         print(f"Oracle에 테이블 '{table_name}' 를 새롭게 생성합니다.")
         print("-- 생성할 Oracle DDL --")
         print(oracle_ddl)
-        oracle_cursor.execute(oracle_ddl)
+        oracle_cursor.execute(oracle_ddl.rstrip().rstrip(';'))      ####
         print(f"Oracle 테이블 {table_name} 생성 완료")
         
     except Exception as e:
         print(f"[오류] Oracle 테이블 생성 중 실패: {e}")
         sys.exit(1)
 
-        
-    index_dict = extract_mysql_indexes(mysql_cursor, table_name)
-
-    index_ddls = generate_oracle_index_ddls(index_dict, table_name)
-
-    for ddl in index_ddls:
-        print(f"[INFO] 인덱스 생성: {ddl}")
-        oracle_cursor.execute(ddl)
-
-
-    # 6. COMMENT 구문 실행
-    try:
-        for comment_sql in comment_sqls:
-            print(f"{comment_sql}")
-            oracle_cursor.execute(comment_sql)
-        print("모든 COMMENT 구문 실행 완료")
-    except Exception as e:
-        print(f"[오류] COMMENT 구문 실행 중 실패: {e}")
-        sys.exit(1)
-
+    
+    print(f"[INFO] index_sqls={len(index_sqls)}, comment_sqls={len(comment_sqls)}")  
+      
     # 6. 데이터 이관
     try:
         mysql_cursor = mysql_conn.cursor(dictionary=True)
-        mysql_cursor.execute(f"SELECT * FROM {table_name}")
+        
+        mysql_cursor.execute("SELECT DATABASE() AS db")
+        print("[DB]", mysql_cursor.fetchone())
+
+        mysql_cursor.execute(f"SELECT COUNT(*) AS cnt FROM `{table_name}`")
+        print("[CNT]", (mysql_cursor.fetchone()))
+
+        mysql_cursor.execute(f"SELECT * FROM `{table_name}`")
         rows = mysql_cursor.fetchall()
+        print("[FETCHED ROWS]", len(rows))
 
         if rows:
             columns = rows[0].keys()
@@ -276,6 +533,34 @@ try:
         print(f"[오류] 데이터 이관 실패: {e}")
         sys.exit(1)
 
+    # index 구문 실행
+    try:
+        for ddl in index_sqls:
+            print(f"[INFO] 인덱스 생성: {ddl}")
+            oracle_cursor.execute(ddl)
+    except Exception as e:
+        print(f"[오류] Index 구문 실행 중 실패: {e}")
+        sys.exit(1)
+
+    # uk 구문 실행
+    try:
+        for ddl in uk_sqls:
+            print(f"[INFO] UK 생성: {ddl}")
+            oracle_cursor.execute(ddl)
+    except Exception as e:
+        print(f"[오류] UK 구문 실행 중 실패: {e}")
+        
+    # 6. COMMENT 구문 실행
+    try:
+        print("comment 구문 실행:")
+        for comment_sql in comment_sqls:
+            print(f"{comment_sql}")
+            oracle_cursor.execute(comment_sql)
+        print("모든 COMMENT 구문 실행 완료")
+    except Exception as e:
+        print(f"[오류] COMMENT 구문 실행 중 실패: {e}")
+        sys.exit(1)    
+
 except Exception as e:
     print(f"[예기치 못한 오류] {e}")
     sys.exit(1)
@@ -291,6 +576,4 @@ finally:
     except Exception as e:
         print(f"[경고] 연결 종료 중 오류 발생: {e}")
 
-
     
-
